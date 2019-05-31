@@ -17,11 +17,11 @@ namespace SharpReverseProxy.Tests {
         private ProxyOptions _proxyOptions;
         private HttpRequestFake _request;
         private HttpResponseFake _response;
-        private List<ProxyRule> _rules;
+        private List<IProxyRule> _rules;
 
         [SetUp]
         public void SetUp() {
-            _rules = new List<ProxyRule>();
+            _rules = new List<IProxyRule>();
             _fakeHttpMessageHandler = new FakeHttpMessageHandler();
             _request = new HttpRequestFake(new Uri("http://myserver.com/api/user"));
             _response = new HttpResponseFake();
@@ -36,7 +36,7 @@ namespace SharpReverseProxy.Tests {
         [Test]
         public async Task Should_match_simple_rule() {
             var matched = false;
-            _rules.Add(new ProxyRule {
+            _rules.Add(new GenericProxyRule {
                 Matcher = uri => uri.AbsolutePath.Contains("api"),
                 Modifier = (msg, user) => { matched = true; }
             });
@@ -49,7 +49,8 @@ namespace SharpReverseProxy.Tests {
             var matched = false;
             ProxyResult result = null;
             _proxyOptions.Reporter = r => result = r;
-            _rules.Add(new ProxyRule {
+            _rules.Add(new GenericProxyRule
+            {
                 Matcher = uri => false,
                 Modifier = (msg, user) => { matched = true; }
             });

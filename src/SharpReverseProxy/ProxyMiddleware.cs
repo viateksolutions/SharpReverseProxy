@@ -1,19 +1,23 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
 
-namespace SharpReverseProxy {
+namespace SharpReverseProxy
+{
     public class ProxyMiddleware {
         private readonly RequestDelegate _next;
         private readonly HttpClient _httpClient;
         private readonly ProxyOptions _options;
 
-        public ProxyMiddleware(RequestDelegate next, IOptions<ProxyOptions> options) {
+        public ProxyMiddleware(RequestDelegate next, IOptions<ProxyOptions> options, IEnumerable<IProxyRule> rules) {
             _next = next;
             _options = options.Value;
+            _options.ProxyRules.AddRange(rules);
             _httpClient = new HttpClient(_options.BackChannelMessageHandler ?? new HttpClientHandler {
                 AllowAutoRedirect = _options.FollowRedirects
             });
@@ -23,7 +27,7 @@ namespace SharpReverseProxy {
             var uri = GeRequestUri(context);
             var resultBuilder = new ProxyResultBuilder(uri);
 
-            var matchedRule = _options.ProxyRules.FirstOrDefault(r => r.Matcher.Invoke(uri));
+            var matchedRule = _options.ProxyRules.FirstOrDefault(r => r.Matcher(uri));
             if (matchedRule == null) {
                 await _next(context);
                 _options.Reporter.Invoke(resultBuilder.NotProxied(context.Response.StatusCode));
@@ -31,16 +35,30 @@ namespace SharpReverseProxy {
             }
 
             if (matchedRule.RequiresAuthentication && !UserIsAuthenticated(context)) {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                _options.Reporter.Invoke(resultBuilder.NotAuthenticated());
-                return;
+                AuthenticateResult authResult = AuthenticateResult.Fail("Authentication failure");
+                foreach (var authScheme in matchedRule.AuthenticationSchemes)
+                {
+                    authResult = await context.AuthenticateAsync(authScheme);
+                    if(authResult.Succeeded)
+                    {
+                        context.User = authResult.Principal;
+                        break;
+                    }
+                }
+
+                if (!authResult.Succeeded)
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    _options.Reporter.Invoke(resultBuilder.NotAuthenticated());
+                    return;
+                }
             }
 
             var proxyRequest = new HttpRequestMessage(new HttpMethod(context.Request.Method), uri);
             SetProxyRequestBody(proxyRequest, context);
             SetProxyRequestHeaders(proxyRequest, context);
 
-            matchedRule.Modifier.Invoke(proxyRequest, context.User);
+            matchedRule.Modifier(proxyRequest, context.User);
 
             proxyRequest.Headers.Host = !proxyRequest.RequestUri.IsDefaultPort 
                 ? $"{proxyRequest.RequestUri.Host}:{proxyRequest.RequestUri.Port}"
@@ -55,12 +73,12 @@ namespace SharpReverseProxy {
             _options.Reporter.Invoke(resultBuilder.Proxied(proxyRequest.RequestUri, context.Response.StatusCode));
         }
 
-        private async Task ProxyTheRequest(HttpContext context, HttpRequestMessage proxyRequest, ProxyRule proxyRule) {
+        private async Task ProxyTheRequest(HttpContext context, HttpRequestMessage proxyRequest, IProxyRule proxyRule) {
             using (var responseMessage = await _httpClient.SendAsync(proxyRequest,
                                                                      HttpCompletionOption.ResponseHeadersRead,
                                                                      context.RequestAborted)) {
 
-                if(proxyRule.PreProcessResponse || proxyRule.ResponseModifier == null) { 
+                if(proxyRule.PreProcessResponse) { 
                     context.Response.StatusCode = (int)responseMessage.StatusCode;
                     context.Response.ContentType = responseMessage.Content?.Headers.ContentType?.MediaType;
                     foreach (var header in responseMessage.Headers) {
@@ -78,9 +96,7 @@ namespace SharpReverseProxy {
                     }
                 }
                 
-                if (proxyRule.ResponseModifier != null) {
-                    await proxyRule.ResponseModifier.Invoke(responseMessage, context);
-                }
+                await proxyRule.ResponseModifier(responseMessage, context);
             }
         }
 

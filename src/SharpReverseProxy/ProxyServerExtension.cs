@@ -12,11 +12,16 @@ namespace SharpReverseProxy {
         /// <param name="app"></param>
         /// <param name="proxyOptions">Options and rules for proxy actions</param>
         /// <returns></returns>
+        public static IApplicationBuilder UseProxy(this IApplicationBuilder app)
+        {
+            return app.UseMiddleware<ProxyMiddleware>();
+        }
+
         public static IApplicationBuilder UseProxy(this IApplicationBuilder app, ProxyOptions proxyOptions) {
             return app.UseMiddleware<ProxyMiddleware>(Options.Create(proxyOptions));
         }
 
-        public static IApplicationBuilder UseProxy(this IApplicationBuilder app, List<ProxyRule> rules, Action<ProxyResult> reporter = null) {
+        public static IApplicationBuilder UseProxy(this IApplicationBuilder app, List<IProxyRule> rules, Action<ProxyResult> reporter = null) {
             return app.UseMiddleware<ProxyMiddleware>(Options.Create(new ProxyOptions(rules, reporter)));
         }
     }
